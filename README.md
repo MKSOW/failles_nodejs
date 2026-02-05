@@ -58,4 +58,4 @@ Après avoir identifié les failles, modifiez le code pour rendre l'API "Product
 ---
 
 ## Livrable
-Un rapport au format PDF ou Markdown contenant vos fiches d'anomalies et le repoque vous avez forké du code source final corrigé.
+Un rapport au format PDF ou Markdown contenant vos fiches d'anomalies et le repoque vous avez forké du code source final corrigé. Il faudra m'envoyer les 2 en message privé sur Teams.
