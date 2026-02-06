@@ -1,50 +1,103 @@
+require('dotenv').config();
 const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const bodyParser = require('body-parser');
+const helmet = require('helmet');
+const bcrypt = require('bcrypt');
+const { body, query, validationResult } = require('express-validator');
 
 const app = express();
+app.use(helmet());
 app.use(bodyParser.json());
 
-// Base de données en mémoire pour l'exo
+// Base de données en mémoire pour l'exo (pour tests). En prod, utiliser une BD persistante.
 const db = new sqlite3.Database(':memory:');
 
-const ADMIN_TOKEN = "SUPER_SECRET_TOKEN_12345"; 
+// Charger le token d'admin depuis les variables d'environnement
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'CHANGE_ME_PLEASE';
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 db.serialize(() => {
-  db.run("CREATE TABLE users (id INTEGER, username TEXT, password TEXT, role TEXT)");
-  db.run("INSERT INTO users VALUES (1, 'admin', 'password123', 'admin')");
-  db.run("INSERT INTO users VALUES (2, 'user1', 'azerty', 'user')");
+  db.run('CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password TEXT, role TEXT)');
+  const insert = db.prepare('INSERT OR IGNORE INTO users (id, username, password, role) VALUES (?, ?, ?, ?)');
+  const hashedAdmin = bcrypt.hashSync('password123', 10);
+  const hashedUser = bcrypt.hashSync('azerty', 10);
+  insert.run(1, 'admin', hashedAdmin, 'admin');
+  insert.run(2, 'user1', hashedUser, 'user');
+  insert.finalize();
 });
 
-app.get('/api/user', (req, res) => {
+// Middleware pour vérifier erreurs de validation
+function handleValidationErrors(req, res, next) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  next();
+}
+
+// Récupération d'un utilisateur - requête paramétrée
+app.get('/api/user', [query('username').isString().notEmpty()], handleValidationErrors, (req, res) => {
   const username = req.query.username;
-  const query = `SELECT id, username, role FROM users WHERE username = '${username}'`;
-  
-  db.get(query, (err, row) => {
-    if (err) res.status(500).send(err.message);
-    else res.json(row);
+  const sql = 'SELECT id, username, role FROM users WHERE username = ?';
+  db.get(sql, [username], (err, row) => {
+    if (err) {
+      console.error('DB error:', err);
+      return res.status(500).json({ error: 'Erreur interne' });
+    }
+    if (!row) return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    return res.json(row);
   });
 });
 
-app.post('/api/delete-user', (req, res) => {
-  const token = req.headers['authorization'];
-  
-  if (token === ADMIN_TOKEN) { 
-    const id = req.body.id;
-    db.run(`DELETE FROM users WHERE id = ${id}`);
-    res.send("Utilisateur supprimé");
-  } else {
-    res.status(403).send("Accès refusé");
+// Middleware d'authentification admin simple (Bearer token)
+function checkAdmin(req, res, next) {
+  const auth = req.headers['authorization'];
+  if (!auth || !auth.startsWith('Bearer ')) return res.status(401).json({ error: 'Non authentifié' });
+  const token = auth.slice(7).trim();
+  if (token !== ADMIN_TOKEN) return res.status(403).json({ error: 'Accès refusé' });
+  next();
+}
+
+app.post('/api/delete-user', checkAdmin, [body('id').isInt({ min: 1 })], handleValidationErrors, (req, res) => {
+  const id = parseInt(req.body.id, 10);
+  db.run('DELETE FROM users WHERE id = ?', [id], function (err) {
+    if (err) {
+      console.error('DB error:', err);
+      return res.status(500).json({ error: 'Erreur interne' });
+    }
+    if (this.changes === 0) return res.status(404).json({ error: 'Utilisateur introuvable' });
+    return res.json({ ok: true, message: 'Utilisateur supprimé' });
+  });
+});
+
+// Endpoint welcome renvoyant JSON (évite XSS)
+app.get('/api/welcome', (req, res) => {
+  const name = req.query.name ? escapeHtml(req.query.name) : 'Visiteur';
+  return res.json({ message: `Bienvenue sur l'API, ${name} !` });
+});
+
+// Debug endpoint sécurisé : ne pas exposer d'informations sensibles
+app.get('/api/debug', (req, res) => {
+  try {
+    throw new Error('Simulated internal error');
+  } catch (err) {
+    console.error('Internal error (debug):', err.message);
+    return res.status(500).json({ error: 'Erreur interne' });
   }
 });
 
-app.get('/api/welcome', (req, res) => {
-  const name = req.query.name || "Visiteur";
-  res.send(`<h1>Bienvenue sur l'API, ${name} !</h1>`);
-});
+// Export app pour tests
+module.exports = app;
 
-app.get('/api/debug', (req, res) => {
-    throw new Error("Base de données inaccessible sur 192.168.1.50:5432");
-});
-
-app.listen(3000, () => console.log('🚀 API vulnérable lancée sur http://localhost:3000'));
+// Lancer le serveur seulement si ce fichier est exécuté directement
+if (require.main === module) {
+  const port = process.env.PORT || 3000;
+  app.listen(port, () => console.log(`🚀 API hardenée lancée sur http://localhost:${port}`));
+}
