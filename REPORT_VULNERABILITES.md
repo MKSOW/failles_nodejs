@@ -188,9 +188,3 @@ res.status(500).json({ error: 'Erreur interne' });
 
 ---
 
-## Pièces jointes / preuves
-- Endpoints vulnérables : `/api/user`, `/api/delete-user`, `/api/welcome`, `/api/debug`.
-- Recommandation : après corrections, exécuter un scan (OWASP ZAP / Nikto) et tests d'injection pour s'assurer de la fermeture des vecteurs.
-
----
-
